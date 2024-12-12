@@ -1,0 +1,3 @@
+declare pi: {
+	setup: (() -> ()),
+}
