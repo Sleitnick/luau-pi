@@ -25,7 +25,6 @@ private:
 	std::vector<ScheduledTask*>* deferred_tasks_temp;
 
 	bool updating;
-	int defer_entry_depth;
 	double time;
 
 public:

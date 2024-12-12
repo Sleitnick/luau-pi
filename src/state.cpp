@@ -2,11 +2,30 @@
 
 #include <lualib.h>
 #include <luacodegen.h>
+
 #include "scheduler.h"
 #include "pilib.h"
 #include "tasklib.h"
+#include "threaddata.h"
 
 using namespace LuauPi;
+
+static void user_thread(lua_State* parent, lua_State* L)
+{
+	if (parent)
+	{
+		ThreadData* td = new ThreadData();
+		lua_setthreaddata(L, td);
+	}
+	else
+	{
+		ThreadData* td = static_cast<ThreadData*>(lua_getthreaddata(L));
+		if (td)
+		{
+			delete td;
+		}
+	}
+}
 
 LuauState::LuauState() : L(luaL_newstate())
 {
@@ -21,6 +40,8 @@ LuauState::LuauState() : L(luaL_newstate())
 	}
 
 	luaL_sandbox(L);
+
+	lua_callbacks(L)->userdata = reinterpret_cast<void*>(&user_thread);
 }
 
 LuauState::~LuauState()

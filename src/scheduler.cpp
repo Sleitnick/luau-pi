@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <exception>
 
+#include "threaddata.h"
+
 static constexpr const char* kTaskScheduler = "TaskScheduler";
 static constexpr int kMaxDeferEntryDepth = 40;
 
@@ -57,7 +59,6 @@ LuauTaskScheduler* LuauTaskScheduler::create(lua_State* L)
 	scheduler->deferred_tasks = new std::vector<ScheduledTask*>();
 	scheduler->deferred_tasks_temp = new std::vector<ScheduledTask*>();
 	scheduler->updating = false;
-	scheduler->defer_entry_depth = 0;
 	scheduler->time = 0;
 	lua_rawsetfield(L, LUA_REGISTRYINDEX, kTaskScheduler);
 
@@ -168,8 +169,17 @@ bool LuauTaskScheduler::defer(lua_State* T, lua_State* from, int n_args, int thr
 {
 	(void)T;
 
-	defer_entry_depth++;
-	if (defer_entry_depth > kMaxDeferEntryDepth)
+	size_t defer_depth = 1;
+	if (from)
+	{
+		ThreadData* parent_td = static_cast<ThreadData*>(lua_getthreaddata(from));
+		if (parent_td)
+		{
+			defer_depth += parent_td->defer_depth;
+		}
+	}
+
+	if (defer_depth > kMaxDeferEntryDepth)
 	{
 		return false;
 	}
@@ -223,6 +233,38 @@ void LuauTaskScheduler::cancel(lua_State* T)
 		else
 		{
 			++it;
+		}
+	}
+
+	auto it_deferred = deferred_tasks->begin();
+	while (it_deferred != deferred_tasks->end())
+	{
+		ScheduledTask* scheduled = *it_deferred;
+
+		lua_getref(state, scheduled->thread_ref);
+		lua_State* thread = lua_tothread(state, -1);
+		lua_pop(state, 1);
+
+		lua_getref(state, scheduled->from_thread_ref);
+		lua_State* from = lua_tothread(state, -1);
+		lua_pop(state, 1);
+
+		if (T == thread || T == from)
+		{
+			if (updating)
+			{
+				scheduled->erase = true;
+				++it_deferred;
+			}
+			else
+			{
+				it_deferred = deferred_tasks->erase(it_deferred);
+				delete scheduled;
+			}
+		}
+		else
+		{
+			++it_deferred;
 		}
 	}
 }
@@ -285,7 +327,6 @@ bool LuauTaskScheduler::update(double now, double dt)
 	while (it2 != deferred_tasks->end())
 	{
 		ScheduledTask* scheduled = *it2;
-		defer_entry_depth = 0;
 
 		lua_getref(state, scheduled->thread_ref);
 		lua_State* T = lua_tothread(state, -1);
@@ -296,6 +337,10 @@ bool LuauTaskScheduler::update(double now, double dt)
 		lua_pop(state, 1);
 
 		spawn(T, T == from ? nullptr : from, scheduled->n_args);
+
+		// Reset defer depth:
+		ThreadData* td = static_cast<ThreadData*>(lua_getthreaddata(T));
+		td->defer_depth = 0;
 
 		lua_unref(state, scheduled->from_thread_ref);
 		delete scheduled;
@@ -316,7 +361,6 @@ bool LuauTaskScheduler::update(double now, double dt)
 		++it2;
 	}
 	deferred_tasks->clear();
-	defer_entry_depth = 0;
 	
 	updating = false;
 
